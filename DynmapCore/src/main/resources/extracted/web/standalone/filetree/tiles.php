@@ -137,11 +137,9 @@ function purgeTiles()
 
 	$map_container = sprintf("%s/tiles/%s/%s/", dirname(__FILE__), $map["world"], $map["map_prefix"]);
 
-	$start_time = microtime(true);
-	deleteTree($map_container);	// recursively delete all files for map
-	$end_time = microtime(true);
-
-	response(sprintf("Deleted map in %f seconds", $end_time - $start_time));
+	if (is_dir($map_container)) {
+		deleteTree($map_container);	// recursively delete all files for map
+	}
 }
 
 function getTileContainer($tile)

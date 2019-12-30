@@ -27,3 +27,6 @@
 /dependency-reduced-pom.xml
 
 /.gradle
+
+# Visual Studio Code
+.vscode/

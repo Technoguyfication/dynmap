@@ -3,20 +3,35 @@
 
 include('authentication.php');
 
-switch ($_SERVER["REQUEST_METHOD"]) {
-	case "POST":
-	case "PUT":
-		setTile();
-		break;
+// check request method
+if ($_SERVER["REQUEST_METHOD"] != "POST") {
+	response(null, 405);	// method not allowed
+	exit();
 }
 
-function setTile()
-{
-	if (!authenticateUser()) {
-		response(null, 401);	// unauthorized
-		return;
-	}
+// get authorization
+if (!authenticateUser()) {
+	response(null, 401);	// unauthorized
+	exit();
+}
 
+switch (strtolower($_REQUEST["action"] ?? null)) {
+	case "write":
+		writeTile();
+		break;
+	case "delete":
+		deleteTile();
+		break;
+	case "purge":
+		purgeTiles();
+		break;
+	default:
+		response("Invalid or missing 'action'", 400);
+		break; // bad request
+}
+
+function writeTile()
+{
 	$tile = [
 		"world" => $_REQUEST["world"] ?? null,
 		"map_prefix" => $_REQUEST["map_prefix"] ?? null,
@@ -27,7 +42,7 @@ function setTile()
 		"file_type" => $_REQUEST["file_type"] ?? null
 	];
 
-	$file = $_FILES["file"] ?? null;
+	$file = $_FILES["file"] ?? null;	// get reference to uploaded file
 
 	// make sure no parameters were left null
 	foreach ($tile as $k => $v) {
@@ -37,16 +52,15 @@ function setTile()
 		}
 	}
 
+	// ensure file is uploaded
 	if (!is_array($file)) {
 		response("File upload missing", 400);
 		return;
 	}
 
 	// create paths for the newly created file
-	// /var/www/standalone/filetree/tiles/world/flat/0/
-	$tile_file_container = sprintf("%s/tiles/%s/%s/%s/", dirname(__FILE__), $tile["world"], $tile["map_prefix"], $tile["zoom"]);
-	// 460.69.png
-	$tile_file_name = sprintf("%s.%s.%s", $tile["x"], $tile["y"], $tile["file_type"]);
+	$tile_file_container = getTileContainer($tile);
+	$tile_file_name = getTileFileName($tile);
 
 	// create tile container if it doesn't exist
 	if (!file_exists($tile_file_container)) {
@@ -74,8 +88,85 @@ function setTile()
 	response(null, 200);	// success
 }
 
+function deleteTile()
+{
+	$tile = [
+		"world" => $_REQUEST["world"] ?? null,
+		"map_prefix" => $_REQUEST["map_prefix"] ?? null,
+		"x" => $_REQUEST["x"] ?? null,
+		"y" => $_REQUEST["y"] ?? null,
+		"zoom" => $_REQUEST["zoom"] ?? null,
+		"file_type" => $_REQUEST["file_type"] ?? null
+	];
+
+	// make sure no parameters were left null
+	foreach ($tile as $k => $v) {
+		if (!isset($v)) {
+			response("Missing parameter: $k", 400);	// bad request
+			return;
+		}
+	}
+
+	$tile_file_name = getTileContainer($tile) . getTileFileName($tile);
+	$files = [$tile_file_name, $tile_file_name . ".md5"];
+
+	// delete image and hash
+	foreach ($files as $file) {
+		if (file_exists($file)) {
+			if (!unlink($file)) {
+				response("Failed to delete file " . $file, 500);
+			}
+		}
+	}
+}
+
+function purgeTiles()
+{
+	$map = [
+		"world" => $_REQUEST["world"] ?? null,
+		"map_prefix" => $_REQUEST["map_prefix"] ?? null
+	];
+
+	// make sure no parameters were left null
+	foreach ($map as $k => $v) {
+		if (!isset($v)) {
+			response("Missing parameter: $k", 400);	// bad request
+			return;
+		}
+	}
+
+	$map_container = sprintf("%s/tiles/%s/%s/", dirname(__FILE__), $map["world"], $map["map_prefix"]);
+
+	$start_time = microtime(true);
+	deleteTree($map_container);	// recursively delete all files for map
+	$end_time = microtime(true);
+
+	response(sprintf("Deleted map in %f seconds", $end_time - $start_time));
+}
+
+function getTileContainer($tile)
+{
+	// /var/www/standalone/filetree/tiles/world/flat/0/
+	return sprintf("%s/tiles/%s/%s/%s/", dirname(__FILE__), $tile["world"], $tile["map_prefix"], $tile["zoom"]);
+}
+
+function getTileFileName($tile)
+{
+	// 460.69.png
+	return sprintf("%s.%s.%s", $tile["x"], $tile["y"], $tile["file_type"]);
+}
+
 function response($body, $code = 200)
 {
 	http_response_code($code);
-	echo $body;
+	echo ($body . "\n");
+}
+
+function deleteTree($dir)
+{
+	$files = array_diff(scandir($dir), array('.', '..'));
+	foreach ($files as $file) {
+		(is_dir("$dir/$file")) ? deleteTree("$dir/$file") : unlink("$dir/$file");
+	}
+	return rmdir($dir);
 }

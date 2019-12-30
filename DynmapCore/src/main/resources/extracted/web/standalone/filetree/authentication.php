@@ -15,5 +15,5 @@ function authenticateUser()
 	}
 
 	include('key.php');
-	return $_REQUEST["key"] = $access_key;
+	return $access_key === ($_REQUEST["key"] ?? null);
 }

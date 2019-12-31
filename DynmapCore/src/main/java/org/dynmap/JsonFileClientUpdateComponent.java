@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.lang.ProcessBuilder.Redirect.Type;
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -262,6 +263,10 @@ public class JsonFileClientUpdateComponent extends ClientUpdateComponent {
         /* Get markers URL */
         sb.append("  markers: '");
         sb.append(core.configuration.getString("url/markers", store.getMarkersURI(login_enabled)));
+        sb.append("',\n");
+        /* Get remote map storage type */
+        sb.append("  storagetype: '");
+        sb.append(store.getClass().getName());
         sb.append("'\n }\n};\n");
         
         byte[] outputBytes = sb.toString().getBytes(cs_utf8);

@@ -1,9 +1,11 @@
 package org.dynmap.storage.remotefiletree;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
-import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -61,19 +63,74 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		@Override
 		public TileRead read() {
 			HttpURLConnection conn = getTileConnection();
+
+			if (conn == null) {
+				return null;
+			}
+
 			TileRead read = new TileRead();
 
 			// read image data
 			try {
-				InputStream body = conn.getInputStream();
-				String lengthString = conn.getHeaderField("Content-Length");
-				int bodyLength = Integer.parseInt(lengthString);
+				InputStream bodyStream = conn.getInputStream();
+				int bodyLength = conn.getHeaderFieldInt("Content-Length", -1);
+
+				// make sure body length was parsed correctly
+				if (bodyLength == -1) {
+					throw new Exception("Server sent invalid body length");
+				}
+
+				// read image data
 				byte[] buffer = new byte[bodyLength];
-			}
-			catch(IOException | NumberFormatException ex) {
-				Log.severe("Tile read error: " + ex);
+				while (bodyStream.read(buffer) >= 0) {}	// read body into buffer
+				read.image = new BufferInputStream(buffer);
+
+				// read content-type header for image format
+				String contentType = conn.getHeaderField("Content-Type");
+				switch (contentType) {
+				case "image/png":
+					read.format = ImageEncoding.PNG;
+					break;
+				case "image/jpeg":
+				case "image/jpg":	// not technically a valid MIME but we all make mistakes
+					read.format = ImageEncoding.JPG;
+					break;
+				default:
+					throw new Exception("Invalid MIME type: " + contentType);
+				}
+
+				// get tile last modified date
+				read.lastModified = conn.getHeaderFieldDate("Last-Modified", -1);
+				if (read.lastModified == -1) {
+					throw new Exception("Server sent invalid or missing Last-Modified header");
+				}
+
+				// fetch file hash
+				HttpURLConnection hashConn = createHttpRequest(conn.getURL().toString() + ".hash", "GET");
+
+				// make sure hash exists
+				if (hashConn.getResponseCode() != 200) {
+					throw new Exception("Hash not found for tile " + toString());
+				}
+
+				// get length of hash body
+				int hashBodyLength = hashConn.getHeaderFieldInt("Content-Length", -1);
+				if (hashBodyLength == -1) {
+					throw new Exception("Server sent invalid hash body length");
+				}
+
+				// read hash body into string
+				BufferedReader hashReader = new BufferedReader(new InputStreamReader(hashConn.getInputStream()));
+				String hashString = hashReader.readLine();	// a number should only be one line
+				
+				// hash body to long
+				read.hashCode = Long.parseLong(hashString);
+			} catch (Exception ex) {
+				Log.severe("Remote tile read error: " + ex);
 				return null;
 			}
+
+			return read;
 		}
 
 		@Override

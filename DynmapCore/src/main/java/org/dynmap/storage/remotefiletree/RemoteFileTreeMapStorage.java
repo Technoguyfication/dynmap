@@ -12,6 +12,7 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.StringJoiner;
 import java.util.UUID;
@@ -25,12 +26,14 @@ import org.dynmap.MapType.ImageVariant;
 import org.dynmap.storage.MapStorage;
 import org.dynmap.storage.MapStorageTile;
 import org.dynmap.utils.BufferInputStream;
+import org.dynmap.utils.BufferOutputStream;
 
 public class RemoteFileTreeMapStorage extends MapStorage {
 	private String urlBase;
 	private String accessKey;
 	private final String multipartBoundary;
 	private final String remoteFileTreeBaseUrl = "standalone/filetree/";
+	private final String tilesEndpoint = remoteFileTreeBaseUrl + "tiles.php";
 
 	public class StorageTile extends MapStorageTile {
 		/**
@@ -42,10 +45,6 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		private String tilePath;
 		private String fullTileUrlNoExt;
 
-		private final byte[] PNG_HEADER = new byte[] { (byte) 0x89, 'P', 'N', 'G', (byte) 0x0D, (byte) 0x0A,
-				(byte) 0x1A, (byte) 0x0A };
-		private final byte[] JPEG_HEADER = new byte[] { (byte) 0xFF, (byte) 0xD8, (byte) 0xFF };
-
 		protected StorageTile(DynmapWorld world, MapType map, int x, int y, int zoom, ImageVariant var) {
 			super(world, map, x, y, zoom, var);
 
@@ -56,13 +55,13 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		/**
 		 * Gets the fully qualified path to a tile using the specified format
 		 */
-		private String getFullTileUrl(ImageEncoding format) {
+		private String createFullTileUrl(ImageEncoding format) {
 			return fullTileUrlNoExt + "." + format.getFileExt();
 		}
 
 		@Override
 		public TileRead read() {
-			HttpURLConnection conn = getTileConnection();
+			HttpURLConnection conn = fetchTileConnection();
 
 			if (conn == null) {
 				return null;
@@ -82,7 +81,8 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 				// read image data
 				byte[] buffer = new byte[bodyLength];
-				while (bodyStream.read(buffer) >= 0) {}	// read body into buffer
+				while (bodyStream.read(buffer) >= 0) {
+				} // read body into buffer
 				read.image = new BufferInputStream(buffer);
 
 				// read content-type header for image format
@@ -92,7 +92,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 					read.format = ImageEncoding.PNG;
 					break;
 				case "image/jpeg":
-				case "image/jpg":	// not technically a valid MIME but we all make mistakes
+				case "image/jpg": // not technically a valid MIME but we all make mistakes
 					read.format = ImageEncoding.JPG;
 					break;
 				default:
@@ -106,25 +106,12 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				}
 
 				// fetch file hash
-				HttpURLConnection hashConn = createHttpRequest(conn.getURL().toString() + ".hash", "GET");
-
-				// make sure hash exists
-				if (hashConn.getResponseCode() != 200) {
-					throw new Exception("Hash not found for tile " + toString());
+				Long hashCode = fetchRemoteHashCode(conn.getURL().toString());
+				if (hashCode == null) {
+					throw new Exception("Failed to fetch hash code");
 				}
 
-				// get length of hash body
-				int hashBodyLength = hashConn.getHeaderFieldInt("Content-Length", -1);
-				if (hashBodyLength == -1) {
-					throw new Exception("Server sent invalid hash body length");
-				}
-
-				// read hash body into string
-				BufferedReader hashReader = new BufferedReader(new InputStreamReader(hashConn.getInputStream()));
-				String hashString = hashReader.readLine();	// a number should only be one line
-				
-				// hash body to long
-				read.hashCode = Long.parseLong(hashString);
+				read.hashCode = hashCode;
 			} catch (Exception ex) {
 				Log.severe("Remote tile read error: " + ex);
 				return null;
@@ -134,8 +121,167 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		}
 
 		@Override
+		public boolean write(long hash, BufferOutputStream encImage) {
+			try {
+				// first, delete the alternate format tile (if it exists)
+				HttpURLConnection deleteAltTileConn = createHttpRequest(tilesEndpoint, "POST");
+				deleteAltTileConn.getOutputStream().write(createDeleteTilePayload(getOppositeEncoding()));
+
+				// make sure alternate tile was deleted correctly. even if the tile didn't
+				// exist, server should return 200
+				if (deleteAltTileConn.getResponseCode() != 200) {
+					throw new Exception("Failed to delete opposite format tile: "
+							+ readInputStreamToString(deleteAltTileConn.getInputStream()));
+				}
+
+				// prepare connection for new tile
+				HttpURLConnection writeTileConn = createHttpRequest(tilesEndpoint, "POST");
+
+				// if encImage is null, we are deleting the current tile
+				if (encImage == null) {
+					writeTileConn.getOutputStream().write(createDeleteTilePayload(getMatchingEncoding()));
+
+					// make sure file deletion was successful
+					if (writeTileConn.getResponseCode() == 200) {
+						return true;
+					} else {
+						throw new Exception("Failed to delete tile: "
+								+ readInputStreamToString(deleteAltTileConn.getInputStream()));
+					}
+				}
+
+				// write new tile
+				writeTileConn.setChunkedStreamingMode(0); // used to indicate we don't know what the size of the body
+															// will be
+				OutputStream out = writeTileConn.getOutputStream();
+
+				// create map of params to send in multipart form
+				Map<String, String> formData = new HashMap<String, String>();
+				formData.put("key", accessKey);
+				formData.put("world", world.getName());
+				formData.put("map_prefix", map.getPrefix() + var.variantSuffix);
+				formData.put("zoom", Integer.toString(zoom));
+				formData.put("x", Integer.toString(x));
+				formData.put("y", Integer.toString(y));
+				formData.put("file_type", getMatchingEncoding().getFileExt());
+				formData.put("hash", Long.toString(hash));
+
+				// write the contents of formData to multipart form
+				writeMultipartFormData(out, formData);
+
+				// write file data to multipart form
+				writeMultipartBoundary(out, false);
+				writeMultipartFile(out, "tile", "tile", encImage.buf);
+				writeMultipartBoundary(out, true); // multipart end boundary
+
+				if (writeTileConn.getResponseCode() == 200) {
+					return true;
+				} else {
+					throw new Exception("Error sending request to server: "
+							+ readInputStreamToString(writeTileConn.getInputStream()));
+				}
+
+			} catch (Exception ex) {
+				Log.severe("Failed to write tile (" + this.toString() + "): " + ex.getMessage());
+				return false;
+			}
+		}
+
+		@Override
 		public boolean exists() {
-			return getTileConnection() != null; // returns null if the tile doesn't exist remotely
+			return fetchTileConnection() != null; // getTileConnection() returns null if the tile doesn't exist remotely
+		}
+
+		@Override
+		public boolean getWriteLock() {
+			return RemoteFileTreeMapStorage.this.getWriteLock(tilePath);
+		}
+
+		@Override
+		public void releaseWriteLock() {
+			RemoteFileTreeMapStorage.this.releaseWriteLock(tilePath);
+		}
+
+		@Override
+		public boolean getReadLock(long timeout) {
+			return RemoteFileTreeMapStorage.this.getReadLock(tilePath, timeout);
+		}
+
+		@Override
+		public void releaseReadLock() {
+			RemoteFileTreeMapStorage.this.releaseReadLock(tilePath);
+		}
+
+		@Override
+		public String getURI() {
+			return tilePath;
+		}
+
+		@Override
+		public boolean equals(Object o) {
+			if (o instanceof StorageTile) {
+				StorageTile st = (StorageTile) o;
+				return tilePath.equals(st.tilePath);
+			}
+			return false;
+		}
+
+		@Override
+		public void cleanup() {
+		}
+
+		private Long fetchRemoteHashCode(String tileUrl) {
+			// check if we need to find the correct tile url
+			if (tileUrl == null) {
+				tileUrl = fetchTileConnectionUrl();
+
+				// if tile url is still null the tile doesn't exist
+				if (tileUrl == null)
+					return null;
+			}
+
+			try {
+				HttpURLConnection hashConn = createHttpRequest(tileUrl + ".hash", "GET");
+
+				// make sure hash exists
+				if (hashConn.getResponseCode() != 200) {
+					throw new Exception("Hash not found");
+				}
+
+				// get length of hash body
+				int hashBodyLength = hashConn.getHeaderFieldInt("Content-Length", -1);
+				if (hashBodyLength == -1) {
+					throw new Exception("Server sent invalid hash body length");
+				}
+
+				// hash body to long
+				String hashString = readInputStreamToString(hashConn.getInputStream());
+				return Long.parseLong(hashString);
+			} catch (Exception ex) {
+				Log.severe(
+						"Failed to fetch hash code for tile " + StorageTile.this.toString() + ": " + ex.getMessage());
+				return null;
+			}
+		}
+
+		@Override
+		public boolean matchesHashCode(long hash) {
+			Long thisHash = fetchRemoteHashCode(null);
+			return thisHash.equals(hash);
+		}
+
+		/**
+		 * Gets the ImageEncoding used by the map
+		 */
+		private ImageEncoding getMatchingEncoding() {
+			return map.getImageFormat().getEncoding();
+		}
+
+		/**
+		 * Gets the ImageEncoding not used by the map
+		 */
+		private ImageEncoding getOppositeEncoding() {
+			return getMatchingEncoding() == ImageEncoding.JPG ? ImageEncoding.PNG : ImageEncoding.JPG;
 		}
 
 		/**
@@ -143,22 +289,25 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		 * 
 		 * @return The HttpURLConnection, or null if the tile doesn't have a valid URL
 		 */
-		private HttpURLConnection getTileConnection() {
-			// try the map default encoding first
-			ImageEncoding defaultEncoding = map.getImageFormat().getEncoding() == ImageEncoding.PNG ? ImageEncoding.PNG
-					: ImageEncoding.JPG;
-
+		private HttpURLConnection fetchTileConnection() {
 			// try default encoding
-			String tileUrl = getFullTileUrl(defaultEncoding);
+			String tileUrl = createFullTileUrl(getMatchingEncoding());
 			HttpURLConnection response = tryGetResponse(tileUrl);
 			if (response != null) {
 				return response;
 			}
 
 			// try other encoding
-			tileUrl = getFullTileUrl(defaultEncoding == ImageEncoding.PNG ? ImageEncoding.JPG : ImageEncoding.PNG);
+			tileUrl = createFullTileUrl(getOppositeEncoding());
 			response = tryGetResponse(tileUrl);
 			return response;
+		}
+
+		private String fetchTileConnectionUrl() {
+			HttpURLConnection conn = fetchTileConnection();
+			if (conn == null)
+				return null;
+			return conn.getURL().toString();
 		}
 
 		/**
@@ -205,6 +354,19 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		public void enqueueZoomOutUpdate() {
 			world.enqueueZoomOutUpdate(this);
 		}
+
+		private byte[] createDeleteTilePayload(ImageEncoding imageType) throws UnsupportedEncodingException {
+			Map<String, String> params = new HashMap<String, String>();
+			params.put("key", accessKey);
+			params.put("world", world.getName());
+			params.put("map_prefix", map.getPrefix() + var.variantSuffix);
+			params.put("zoom", Integer.toString(zoom));
+			params.put("x", Integer.toString(x));
+			params.put("y", Integer.toString(y));
+			params.put("file_type", imageType.getFileExt());
+
+			return createFormData(params);
+		}
 	}
 
 	public RemoteFileTreeMapStorage() {
@@ -226,7 +388,57 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 	@Override
 	public String getTilesURI(boolean login_enabled) {
-		return remoteFileTreeBaseUrl + "tiles.php";
+		return remoteFileTreeBaseUrl + "tiles/";
+	}
+
+	@Override
+	public MapStorageTile getTile(DynmapWorld world, MapType map, int x, int y, int zoom, ImageVariant var) {
+		return new StorageTile(world, map, x, y, zoom, var);
+	}
+
+	@Override
+	public MapStorageTile getTile(DynmapWorld world, String uri) {
+		String[] suri = uri.split("/");
+		if (suri.length < 2)
+			return null;
+		String mname = suri[0]; // Map URI - might include variant
+		MapType mt = null;
+		ImageVariant imgvar = null;
+		// Find matching map type and image variant
+		for (int mti = 0; (mt == null) && (mti < world.maps.size()); mti++) {
+			MapType type = world.maps.get(mti);
+			ImageVariant[] var = type.getVariants();
+			for (int ivi = 0; (imgvar == null) && (ivi < var.length); ivi++) {
+				if (mname.equals(type.getPrefix() + var[ivi].variantSuffix)) {
+					mt = type;
+					imgvar = var[ivi];
+				}
+			}
+		}
+		if (mt == null) { // Not found?
+			return null;
+		}
+		// Now, take the last section and parse out coordinates and zoom
+		String fname = suri[suri.length - 1];
+		String[] coord = fname.split("[_\\.]");
+		if (coord.length < 3) { // 3 or 4
+			return null;
+		}
+		int zoom = 0;
+		int x, y;
+		try {
+			if (coord[0].charAt(0) == 'z') {
+				zoom = coord[0].length();
+				x = Integer.parseInt(coord[1]);
+				y = Integer.parseInt(coord[2]);
+			} else {
+				x = Integer.parseInt(coord[0]);
+				y = Integer.parseInt(coord[1]);
+			}
+			return getTile(world, mt, x, y, zoom, imgvar);
+		} catch (NumberFormatException nfx) {
+			return null;
+		}
 	}
 
 	/**
@@ -258,13 +470,29 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	 * 
 	 * @throws UnsupportedEncodingException
 	 */
-	private byte[] getFormData(OutputStream out, Map<String, String> params) throws UnsupportedEncodingException {
+	private byte[] createFormData(Map<String, String> params) throws UnsupportedEncodingException {
 		StringJoiner sj = new StringJoiner("&");
 		for (Map.Entry<String, String> entry : params.entrySet())
 			sj.add(URLEncoder.encode(entry.getKey(), "UTF-8") + "=" + URLEncoder.encode(entry.getValue(), "UTF-8"));
 		return sj.toString().getBytes(StandardCharsets.UTF_8);
 	}
 
+	/**
+	 * Writes multiple multipart text fields to an OutputStream. This does not write
+	 * the multipart ending boundary, one must be written manually.
+	 */
+	private void writeMultipartFormData(OutputStream out, Map<String, String> params)
+			throws UnsupportedEncodingException, IOException {
+		for (Map.Entry<String, String> entry : params.entrySet()) {
+			writeMultipartBoundary(out, false);
+			writeMultipartTextField(out, entry.getKey(), entry.getValue());
+			writeMultipartBoundary(out, false);
+		}
+	}
+
+	/**
+	 * Writes a single multipart text field to the specified OutputStream
+	 */
 	private void writeMultipartTextField(OutputStream out, String key, String value)
 			throws UnsupportedEncodingException, IOException {
 		String o = "Content-Disposition: form-data; name=\"" + URLEncoder.encode(key, "UTF-8") + "\"\r\n\r\n";
@@ -273,19 +501,19 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		out.write("\r\n".getBytes(StandardCharsets.UTF_8));
 	}
 
-	private void writeMultipartFile(OutputStream out, String name, String fileName, InputStream fileStream)
-			throws IOException {
+	/**
+	 * Writes a multipart file to the specified OutputStream
+	 */
+	private void writeMultipartFile(OutputStream out, String name, String fileName, byte[] buffer) throws IOException {
 		String o = "Content-Disposition: form-data; name=\"" + URLEncoder.encode(name, "UTF-8") + "\"; filename=\""
 				+ URLEncoder.encode(fileName, "UTF-8") + "\"\r\n\r\n";
 		out.write(o.getBytes(StandardCharsets.UTF_8));
-		byte[] buffer = new byte[2048];
-		for (int n = 0; n >= 0; n = fileStream.read(buffer))
-			out.write(buffer, 0, n);
+		out.write(buffer);
 		out.write("\r\n".getBytes(StandardCharsets.UTF_8));
 	}
 
 	/**
-	 * Writes a multipart boundary to the HTTP stream.
+	 * Writes a multipart boundary to the OutputStream
 	 * 
 	 * @param out The HTTP stream
 	 * @param end Whether the multipart boundary signifies the end of the multipart
@@ -293,5 +521,16 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	 */
 	private void writeMultipartBoundary(OutputStream out, boolean end) throws IOException {
 		out.write(("--" + multipartBoundary + (end ? "--" : "")).getBytes(StandardCharsets.UTF_8));
+	}
+
+	/**
+	 * Reads an entire InputStream to a single String
+	 */
+	private String readInputStreamToString(InputStream inputStream) throws IOException {
+		BufferedReader stringReader = new BufferedReader(new InputStreamReader(inputStream));
+		String hashString = stringReader.readLine();
+		stringReader.close();
+
+		return hashString;
 	}
 }

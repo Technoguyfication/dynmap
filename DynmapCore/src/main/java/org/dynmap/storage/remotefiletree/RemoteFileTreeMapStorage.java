@@ -18,9 +18,11 @@ import org.dynmap.DynmapCore;
 import org.dynmap.DynmapWorld;
 import org.dynmap.Log;
 import org.dynmap.MapType;
+import org.dynmap.MapType.ImageEncoding;
 import org.dynmap.MapType.ImageVariant;
 import org.dynmap.storage.MapStorage;
 import org.dynmap.storage.MapStorageTile;
+import org.dynmap.utils.BufferInputStream;
 
 public class RemoteFileTreeMapStorage extends MapStorage {
 	private String urlBase;
@@ -29,17 +31,122 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	private final String remoteFileTreeBaseUrl = "standalone/filetree/";
 
 	public class StorageTile extends MapStorageTile {
-		private String uri;
+		/**
+		 * The tile path from the world to the name of the file. No leading HTTP path or
+		 * extension included.
+		 * 
+		 * Ex: world/map/zoom/x.y
+		 */
+		private String tilePath;
+		private String fullTileUrlNoExt;
+
+		private final byte[] PNG_HEADER = new byte[] { (byte) 0x89, 'P', 'N', 'G', (byte) 0x0D, (byte) 0x0A,
+				(byte) 0x1A, (byte) 0x0A };
+		private final byte[] JPEG_HEADER = new byte[] { (byte) 0xFF, (byte) 0xD8, (byte) 0xFF };
 
 		protected StorageTile(DynmapWorld world, MapType map, int x, int y, int zoom, ImageVariant var) {
 			super(world, map, x, y, zoom, var);
 
-			uri = world.getName() + "/" + map.getPrefix() + var.variantsuffix + "/" + zoom + "/" + x + "." + y + "." + map.getImageFormat().getSuffix();
+			tilePath = world.getName() + "/" + map.getPrefix() + var.variantSuffix + "/" + zoom + "/" + x + "." + y;
+			fullTileUrlNoExt = urlBase + "/" + remoteFileTreeBaseUrl + "/tiles/" + tilePath;
+		}
+
+		/**
+		 * Gets the fully qualified path to a tile using the specified format
+		 */
+		private String getFullTileUrl(ImageEncoding format) {
+			return fullTileUrlNoExt + "." + format.getFileExt();
 		}
 
 		@Override
-		public void exists() {
-			
+		public TileRead read() {
+			HttpURLConnection conn = getTileConnection();
+			TileRead read = new TileRead();
+
+			// read image data
+			try {
+				InputStream body = conn.getInputStream();
+				String lengthString = conn.getHeaderField("Content-Length");
+				int bodyLength = Integer.parseInt(lengthString);
+				byte[] buffer = new byte[bodyLength];
+			}
+			catch(IOException | NumberFormatException ex) {
+				Log.severe("Tile read error: " + ex);
+				return null;
+			}
+		}
+
+		@Override
+		public boolean exists() {
+			return getTileConnection() != null; // returns null if the tile doesn't exist remotely
+		}
+
+		/**
+		 * Opens an HTTP connection to the tile file
+		 * 
+		 * @return The HttpURLConnection, or null if the tile doesn't have a valid URL
+		 */
+		private HttpURLConnection getTileConnection() {
+			// try the map default encoding first
+			ImageEncoding defaultEncoding = map.getImageFormat().getEncoding() == ImageEncoding.PNG ? ImageEncoding.PNG
+					: ImageEncoding.JPG;
+
+			// try default encoding
+			String tileUrl = getFullTileUrl(defaultEncoding);
+			HttpURLConnection response = tryGetResponse(tileUrl);
+			if (response != null) {
+				return response;
+			}
+
+			// try other encoding
+			tileUrl = getFullTileUrl(defaultEncoding == ImageEncoding.PNG ? ImageEncoding.JPG : ImageEncoding.PNG);
+			response = tryGetResponse(tileUrl);
+			return response;
+		}
+
+		/**
+		 * Tries to open an HTTP request, returns null if the response is not a 200 OK
+		 */
+		private HttpURLConnection tryGetResponse(String url) {
+			try {
+				HttpURLConnection conn = createHttpRequest(url, "GET");
+
+				if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+					return conn;
+				} else {
+					return null;
+				}
+			} catch (IOException ex) {
+				Log.severe("HTTP error: " + ex.getMessage());
+				return null;
+			}
+		}
+
+		@Override
+		public MapStorageTile getZoomOutTile() {
+			int xx, yy;
+			int step = 1 << zoom;
+			if (x >= 0)
+				xx = x - (x % (2 * step));
+			else
+				xx = x + (x % (2 * step));
+			yy = -y;
+			if (yy >= 0)
+				yy = yy - (yy % (2 * step));
+			else
+				yy = yy + (yy % (2 * step));
+			yy = -yy;
+			return new StorageTile(world, map, xx, yy, zoom + 1, var);
+		}
+
+		@Override
+		public int hashCode() {
+			return tilePath.hashCode();
+		}
+
+		@Override
+		public void enqueueZoomOutUpdate() {
+			world.enqueueZoomOutUpdate(this);
 		}
 	}
 

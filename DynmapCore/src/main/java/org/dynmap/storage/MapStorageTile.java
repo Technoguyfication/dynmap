@@ -134,4 +134,12 @@ public abstract class MapStorageTile {
      */
     @Override
     public abstract int hashCode();
+
+    /**
+     * Gets a string that can be used to identify this tile
+     * */
+    @Override
+    public String toString() {
+        return world.toString() + " " + map.toString() + "zoom: " + zoom + " " + x + "," + y;
+    }
 }

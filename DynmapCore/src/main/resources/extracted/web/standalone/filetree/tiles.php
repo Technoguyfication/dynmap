@@ -71,7 +71,7 @@ function writeTile()
 	try {
 		if (move_uploaded_file($file["tmp_name"], $tile_file_container . $tile_file_name)) {
 			// success, write file hash
-			$hash_file = fopen($tile_file_container . $tile_file_name . ".md5", "w");
+			$hash_file = fopen($tile_file_container . $tile_file_name . ".hash", "w");
 			if (!$hash_file || !fwrite($hash_file, $tile["hash"])) {
 				// failed to write hash, delete image file
 				unlink($tile_file_container . $tile_file_name);
@@ -108,7 +108,7 @@ function deleteTile()
 	}
 
 	$tile_file_name = getTileContainer($tile) . getTileFileName($tile);
-	$files = [$tile_file_name, $tile_file_name . ".md5"];
+	$files = [$tile_file_name, $tile_file_name . ".hash"];
 
 	// delete image and hash
 	foreach ($files as $file) {

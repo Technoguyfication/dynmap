@@ -35,7 +35,7 @@ storage:
   #password: dynmap
   #prefix: ""
   #flags: "?allowReconnect=true"
-  # Remote Filetree (uses a REST API to create flat files on a standalone web server)
+  # Remote Filetree (uses an HTTP API to create flat files on a standalone web server)
   # type: remotefiletree
   # url: "https://dynmap.example.com/"
   # key: dynmap

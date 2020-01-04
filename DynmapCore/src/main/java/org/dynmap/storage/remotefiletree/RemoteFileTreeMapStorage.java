@@ -12,7 +12,10 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.StringJoiner;
 import java.util.UUID;
@@ -25,7 +28,10 @@ import org.dynmap.PlayerFaces;
 import org.dynmap.MapType.ImageEncoding;
 import org.dynmap.MapType.ImageVariant;
 import org.dynmap.storage.MapStorage;
+import org.dynmap.storage.MapStorageBaseTileEnumCB;
 import org.dynmap.storage.MapStorageTile;
+import org.dynmap.storage.MapStorageTileEnumCB;
+import org.dynmap.storage.MapStorageTileSearchEndCB;
 import org.dynmap.utils.BufferInputStream;
 import org.dynmap.utils.BufferOutputStream;
 
@@ -157,18 +163,19 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				OutputStream out = writeTileConn.getOutputStream();
 
 				// create map of params to send in multipart form
-				Map<String, String> formData = new HashMap<String, String>();
-				formData.put("key", accessKey);
-				formData.put("world", world.getName());
-				formData.put("map_prefix", map.getPrefix() + var.variantSuffix);
-				formData.put("zoom", Integer.toString(zoom));
-				formData.put("x", Integer.toString(x));
-				formData.put("y", Integer.toString(y));
-				formData.put("file_type", getMatchingEncoding().getFileExt());
-				formData.put("hash", Long.toString(hash));
+				Map<String, String> params = new HashMap<String, String>();
+				params.put("key", accessKey);
+				params.put("action", "write");
+				params.put("world", world.getName());
+				params.put("map_prefix", map.getPrefix() + var.variantSuffix);
+				params.put("zoom", Integer.toString(zoom));
+				params.put("x", Integer.toString(x));
+				params.put("y", Integer.toString(y));
+				params.put("file_type", getMatchingEncoding().getFileExt());
+				params.put("hash", Long.toString(hash));
 
 				// write the contents of formData to multipart form
-				writeMultipartFormData(out, formData);
+				writeMultipartFormData(out, params);
 
 				// write file data to multipart form
 				writeMultipartBoundary(out, false);
@@ -359,6 +366,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		private byte[] createDeleteTilePayload(ImageEncoding imageType) throws UnsupportedEncodingException {
 			Map<String, String> params = new HashMap<String, String>();
 			params.put("key", accessKey);
+			params.put("action", "delete");
 			params.put("world", world.getName());
 			params.put("map_prefix", map.getPrefix() + var.variantSuffix);
 			params.put("zoom", Integer.toString(zoom));
@@ -472,6 +480,126 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	}
 
 	@Override
+	public void enumMapTiles(DynmapWorld world, MapType map, MapStorageTileEnumCB cb) {
+		List<MapType> mtlist;
+
+		if (map != null) {
+			mtlist = Collections.singletonList(map);
+		} else { // Else, add all maps
+			mtlist = new ArrayList<MapType>(world.maps);
+		}
+		for (MapType mt : mtlist) {
+			ImageVariant[] vars = mt.getVariants();
+			for (ImageVariant var : vars) {
+				// enumerate zoom levels
+				ArrayList<Integer> zoomLevels = new ArrayList<Integer>();
+				try {
+					HttpURLConnection conn = createHttpRequest(tilesEndpoint, "GET");
+
+					// write parameters to output
+					Map<String, String> params = new HashMap<String, String>();
+					params.put("action", "enumzoom");
+					params.put("world", world.getName());
+					params.put("map_prefix", map.getPrefix() + var.variantSuffix);
+					byte[] formData = createFormData(params);
+					conn.getOutputStream().write(formData);
+
+					// make sure we get the correct response code
+					int responseCode = conn.getResponseCode();
+					if (responseCode != 200) {
+						// throw new Exception("Invalid response code: " + responseCode);
+						Log.severe("Failed to enumerate zoom levels: invalid response code: " + responseCode);
+						return;
+					}
+
+					// read each zoom level from response
+					BufferedReader stringReader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+					String zoomString;
+					while ((zoomString = stringReader.readLine()) != null) {
+						try {
+							zoomLevels.add(Integer.parseInt(zoomString));
+						} catch (NumberFormatException ex) {
+							Log.warning("Invalid zoom level " + zoomString + " enumerated for map " + world.getName() + ":" + map.getPrefix() + var.variantSuffix);
+							continue; // ignore invalid entries
+						}
+					}
+				} catch (Exception ex) {
+					Log.severe("Failed to enumerate zoom levels: " + ex.getMessage());
+				}
+
+				for(Integer zoom : zoomLevels) {
+					processEnumMapTiles(world, mt, var, zoom, cb, null, null);
+				}
+			}
+		}
+	}
+
+	@Override
+	public void enumMapBaseTiles(DynmapWorld world, MapType map, MapStorageBaseTileEnumCB cbBase,
+			MapStorageTileSearchEndCB cbEnd) {
+		List<MapType> mtlist;
+
+		if (map != null) {
+			mtlist = Collections.singletonList(map);
+		} else { // Else, add all maps
+			mtlist = new ArrayList<MapType>(world.maps);
+		}
+		for (MapType mt : mtlist) {
+			ImageVariant[] vars = mt.getVariants();
+			for (ImageVariant var : vars) {
+				processEnumMapTiles(world, mt, var, 0, null, cbBase, cbEnd);
+			}
+		}
+	}
+
+	private void processEnumMapTiles(DynmapWorld world, MapType map, ImageVariant var, int zoom,
+			MapStorageTileEnumCB cb, MapStorageBaseTileEnumCB cbBase, MapStorageTileSearchEndCB cbEnd) {
+		try {
+			HttpURLConnection conn = createHttpRequest(tilesEndpoint, "GET");
+
+			// write parameters to output
+			Map<String, String> params = new HashMap<String, String>();
+			params.put("action", "enumtiles");
+			params.put("world", world.getName());
+			params.put("map_prefix", map.getPrefix() + var.variantSuffix);
+			params.put("zoom", Integer.toString(zoom));
+			byte[] formData = createFormData(params);
+			conn.getOutputStream().write(formData);
+
+			// make sure we get the correct response code
+			int responseCode = conn.getResponseCode();
+			if (responseCode != 200) {
+				throw new Exception("Invalid response code: " + responseCode);
+			}
+
+			// read each line as a new map tile
+			BufferedReader stringReader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+			String entry;
+			while ((entry = stringReader.readLine()) != null) {
+				// tiles follow format x.y.ext
+				String[] fileNameSplit = entry.split("\\.");
+				StorageTile st = new StorageTile(world, map, Integer.parseInt(fileNameSplit[0]),
+						Integer.parseInt(fileNameSplit[1]), zoom, var);
+				final ImageEncoding enc = ImageEncoding.fromExt(fileNameSplit[2]);
+
+				if (cb != null) {
+					cb.tileFound(st, enc);
+				}
+				if (cbBase != null && zoom == 0) {
+					cbBase.tileFound(st, enc);
+				}
+			}
+		} catch (Exception ex) {
+			Log.severe("Failed to enumerate map tiles: " + ex.getMessage());
+		} finally {
+			if (cbEnd != null) {
+				cbEnd.searchEnded();
+			}
+		}
+
+	}
+
+	@Override
 	public String getMarkerFile(String world) {
 		// TODO: fix stub
 		return "{}";
@@ -490,6 +618,12 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 	@Override
 	public BufferInputStream getPlayerFaceImage(String playername, PlayerFaces.FaceType facetype) {
+		// TODO: fix stub
+		return new BufferInputStream(new byte[0]);
+	}
+
+	@Override
+	public BufferInputStream getMarkerImage(String markerid) {
 		// TODO: fix stub
 		return new BufferInputStream(new byte[0]);
 	}

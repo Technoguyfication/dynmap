@@ -3,18 +3,6 @@
 
 include('authentication.php');
 
-// check request method
-if ($_SERVER["REQUEST_METHOD"] != "POST") {
-	response(null, 405);	// method not allowed
-	exit();
-}
-
-// get authorization
-if (!authenticateUser()) {
-	response(null, 401);	// unauthorized
-	exit();
-}
-
 switch (strtolower($_REQUEST["action"] ?? null)) {
 	case "write":
 		writeTile();
@@ -25,13 +13,48 @@ switch (strtolower($_REQUEST["action"] ?? null)) {
 	case "purge":
 		purgeTiles();
 		break;
+	case "enumtiles":
+		enumTiles();
+		break;
+	case "enumzoom":
+		enumZoomLevels();
+		break;
 	default:
 		response("Invalid or missing 'action'", 400);
 		break; // bad request
 }
 
+/**
+ * Enforces that the request has a valid key sent with it
+ * */
+function checkAuthentication()
+{
+	if (!authenticateUser()) {
+		response(null, 401);	// unauthorized
+		exit();
+	}
+}
+
+/**
+ * Enforces that the specified method be used for the request, exits the script if otherwise
+ * @param string $method The method to be used
+ * */
+function checkMethod(string $method)
+{
+	if ($_SERVER["REQUEST_METHOD"] != $method) {
+		response(null, 405);	// method not allowed
+		exit();
+	}
+}
+
+/**
+ * Writes a new or updated tile to the disk
+ * */
 function writeTile()
 {
+	checkAuthentication();
+	checkMethod("POST");
+
 	$tile = [
 		"world" => $_REQUEST["world"] ?? null,
 		"map_prefix" => $_REQUEST["map_prefix"] ?? null,
@@ -88,8 +111,14 @@ function writeTile()
 	response(null, 200);	// success
 }
 
+/**
+ * Deletes a tile from the disk if it exists
+ * */
 function deleteTile()
 {
+	checkAuthentication();
+	checkMethod("POST");
+
 	$tile = [
 		"world" => $_REQUEST["world"] ?? null,
 		"map_prefix" => $_REQUEST["map_prefix"] ?? null,
@@ -120,8 +149,14 @@ function deleteTile()
 	}
 }
 
+/**
+ * Deletes ALL tiles from the disk for the specified world and map
+ * */
 function purgeTiles()
 {
+	checkAuthentication();
+	checkMethod("POST");
+
 	$map = [
 		"world" => $_REQUEST["world"] ?? null,
 		"map_prefix" => $_REQUEST["map_prefix"] ?? null
@@ -139,6 +174,72 @@ function purgeTiles()
 
 	if (is_dir($map_container)) {
 		deleteTree($map_container);	// recursively delete all files for map
+	}
+}
+
+/**
+ * Sends a list of all the tiles for a specified world, map, and (optional) zoom in a list
+ * */
+function enumTiles()
+{
+	checkMethod("GET");
+
+	$tile = [
+		"world" => $_REQUEST["world"] ?? null,
+		"map_prefix" => $_REQUEST["map_prefix"] ?? null,
+		"zoom" => $_REQUEST["zoom"] ?? null
+	];
+
+	// make sure no parameters were left null
+	foreach ($tile as $k => $v) {
+		if (!isset($v)) {
+			response("Missing parameter: $k", 400);	// bad request
+			return;
+		}
+	}
+
+	$container = getTileContainer($tile);
+	header("Content-Type: text/plain");
+
+	if (is_dir($container)) {
+		foreach (scandir($container) as $entry) {
+			if (!is_dir($entry)) {
+				echo ($entry . "\n");
+			}
+		}
+	}
+}
+
+/**
+ * Sends a list of all the zoom levels for a specified world and map
+ * */
+function enumZoomLevels()
+{
+	checkMethod("GET");
+
+	$tile = [
+		"world" => $_REQUEST["world"] ?? null,
+		"map_prefix" => $_REQUEST["map_prefix"] ?? null,
+		"zoom" => 0	// dummy value
+	];
+
+	// make sure no parameters were left null
+	foreach ($tile as $k => $v) {
+		if (!isset($v)) {
+			response("Missing parameter: $k", 400);	// bad request
+			return;
+		}
+	}
+
+	$container = dirname(getTileContainer($tile), 1);	// get parent directory of tile container (directory) with zoom levels
+	header("Content-Type: text/plain");
+
+	if (is_dir($container)) {
+		foreach (scandir($container) as $entry) {
+			if (!is_file($entry) && $entry != "." && $entry != "..") {
+				echo ($entry . "\n");
+			}
+		}
 	}
 }
 

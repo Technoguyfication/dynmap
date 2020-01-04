@@ -21,6 +21,7 @@ import org.dynmap.DynmapCore;
 import org.dynmap.DynmapWorld;
 import org.dynmap.Log;
 import org.dynmap.MapType;
+import org.dynmap.PlayerFaces;
 import org.dynmap.MapType.ImageEncoding;
 import org.dynmap.MapType.ImageVariant;
 import org.dynmap.storage.MapStorage;
@@ -392,6 +393,11 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	}
 
 	@Override
+	public String getMarkersURI(boolean login_enabled) {
+		return remoteFileTreeBaseUrl + "markers/";
+	}
+
+	@Override
 	public MapStorageTile getTile(DynmapWorld world, MapType map, int x, int y, int zoom, ImageVariant var) {
 		return new StorageTile(world, map, x, y, zoom, var);
 	}
@@ -463,6 +469,47 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		http.setDoOutput(true);
 
 		return http;
+	}
+
+	@Override
+	public String getMarkerFile(String world) {
+		// TODO: fix stub
+		return "{}";
+	}
+
+	@Override
+	public void purgeMapTiles(DynmapWorld world, MapType type) {
+		// TODO: fix stub
+	}
+
+	@Override
+	public boolean setPlayerFaceImage(String playerName, PlayerFaces.FaceType type, BufferOutputStream encImage) {
+		// TODO: fix stub
+		return false;
+	}
+
+	@Override
+	public BufferInputStream getPlayerFaceImage(String playername, PlayerFaces.FaceType facetype) {
+		// TODO: fix stub
+		return new BufferInputStream(new byte[0]);
+	}
+
+	@Override
+	public boolean setMarkerImage(String markerid, BufferOutputStream encImage) {
+		// TODO: fix stub
+		return false;
+	}
+
+	@Override
+	public boolean setMarkerFile(String world, String content) {
+		// TODO: fix stub
+		return false;
+	}
+
+	@Override
+	public boolean hasPlayerFaceImage(String playerName, PlayerFaces.FaceType type) {
+		// TODO: fix stub
+		return false;
 	}
 
 	/**

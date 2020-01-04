@@ -1,6 +1,7 @@
 package org.dynmap.storage.remotefiletree;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -157,10 +158,10 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 					}
 				}
 
-				// write new tile
-				writeTileConn.setChunkedStreamingMode(0); // used to indicate we don't know what the size of the body
-															// will be
-				OutputStream out = writeTileConn.getOutputStream();
+				writeTileConn.setRequestProperty("Connection", "Keep-Alive");
+				writeTileConn.setRequestProperty("Cache-Control", "no-cache");
+				writeTileConn.setRequestProperty("Content-Type", "multipart/form-data;boudary=" + multipartBoundary);
+				ByteArrayOutputStream outBuffer = new ByteArrayOutputStream();
 
 				// create map of params to send in multipart form
 				Map<String, String> params = new HashMap<String, String>();
@@ -175,20 +176,27 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				params.put("hash", Long.toString(hash));
 
 				// write the contents of formData to multipart form
-				writeMultipartFormData(out, params);
+				writeMultipartFormData(outBuffer, params);
 
 				// write file data to multipart form
-				writeMultipartBoundary(out, false);
-				writeMultipartFile(out, "tile", "tile", encImage.buf);
-				writeMultipartBoundary(out, true); // multipart end boundary
+				writeMultipartBoundary(outBuffer, false);
+				writeMultipartFile(outBuffer, "tile", "tile", encImage.buf);
+				writeMultipartBoundary(outBuffer, true); // multipart end boundary
 
-				if (writeTileConn.getResponseCode() == 200) {
+				// write buffer to connection
+				writeTileConn.setFixedLengthStreamingMode(outBuffer.size());
+				OutputStream outStream = writeTileConn.getOutputStream();
+				outStream.write(outBuffer.toByteArray());
+				outStream.flush();
+				outStream.close();
+
+				int responseCode = writeTileConn.getResponseCode();
+				if (responseCode == 200) {
 					return true;
 				} else {
-					throw new Exception("Error sending request to server: "
+					throw new Exception("Error sending request to server, responded with " + responseCode + ": "
 							+ readInputStreamToString(writeTileConn.getInputStream()));
 				}
-
 			} catch (Exception ex) {
 				Log.severe("Failed to write tile (" + this.toString() + "): " + ex.getMessage());
 				return false;
@@ -238,6 +246,11 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		public void cleanup() {
 		}
 
+		/**
+		 * Fetches the remote hash code for a tile
+		 * 
+		 * @return The hash code, or null if it does not exist
+		 */
 		private Long fetchRemoteHashCode(String tileUrl) {
 			// check if we need to find the correct tile url
 			if (tileUrl == null) {
@@ -275,6 +288,9 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		@Override
 		public boolean matchesHashCode(long hash) {
 			Long thisHash = fetchRemoteHashCode(null);
+			if (thisHash == null) {
+				return false;
+			}
 			return thisHash.equals(hash);
 		}
 
@@ -473,8 +489,9 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		HttpURLConnection http = (HttpURLConnection) conn;
 
 		// set up http client
-		http.setRequestMethod(method);
+		http.setUseCaches(false);
 		http.setDoOutput(true);
+		http.setRequestMethod(method);
 
 		return http;
 	}
@@ -519,7 +536,8 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 						try {
 							zoomLevels.add(Integer.parseInt(zoomString));
 						} catch (NumberFormatException ex) {
-							Log.warning("Invalid zoom level " + zoomString + " enumerated for map " + world.getName() + ":" + map.getPrefix() + var.variantSuffix);
+							Log.warning("Invalid zoom level " + zoomString + " enumerated for map " + world.getName()
+									+ ":" + map.getPrefix() + var.variantSuffix);
 							continue; // ignore invalid entries
 						}
 					}
@@ -527,7 +545,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 					Log.severe("Failed to enumerate zoom levels: " + ex.getMessage());
 				}
 
-				for(Integer zoom : zoomLevels) {
+				for (Integer zoom : zoomLevels) {
 					processEnumMapTiles(world, mt, var, zoom, cb, null, null);
 				}
 			}
@@ -709,9 +727,13 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	 */
 	private String readInputStreamToString(InputStream inputStream) throws IOException {
 		BufferedReader stringReader = new BufferedReader(new InputStreamReader(inputStream));
-		String hashString = stringReader.readLine();
+		StringBuilder stringBuilder = new StringBuilder();
+		String line;
+		while ((line = stringReader.readLine()) != null) {
+			stringBuilder.append(line + "\n");
+		}
 		stringReader.close();
 
-		return hashString;
+		return stringBuilder.toString();
 	}
 }

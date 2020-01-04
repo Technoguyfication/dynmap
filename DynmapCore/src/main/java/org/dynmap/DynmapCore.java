@@ -58,6 +58,7 @@ import org.dynmap.storage.mysql.MySQLMapStorage;
 import org.dynmap.storage.mariadb.MariaDBMapStorage;
 import org.dynmap.storage.sqllte.SQLiteMapStorage;
 import org.dynmap.storage.postgresql.PostgreSQLMapStorage;
+import org.dynmap.storage.remotefiletree.RemoteFileTreeMapStorage;
 import org.dynmap.utils.BlockStep;
 import org.dynmap.utils.ImageIOManager;
 import org.dynmap.web.BanIPFilter;
@@ -391,6 +392,9 @@ public class DynmapCore implements DynmapCommonAPI {
         }
         else if (storetype.equals("postgres") || storetype.equals("postgresql")) {
             defaultStorage = new PostgreSQLMapStorage();
+        }
+        else if (storetype.equals("remotefiletree")) {
+            defaultStorage = new RemoteFileTreeMapStorage();
         }
         else {
             Log.severe("Invalid storage type for map data: " + storetype);

@@ -160,7 +160,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 				writeTileConn.setRequestProperty("Connection", "Keep-Alive");
 				writeTileConn.setRequestProperty("Cache-Control", "no-cache");
-				writeTileConn.setRequestProperty("Content-Type", "multipart/form-data;boudary=" + multipartBoundary);
+				writeTileConn.setRequestProperty("Content-Type", "multipart/form-data;boundary=" + multipartBoundary);
 				ByteArrayOutputStream outBuffer = new ByteArrayOutputStream();
 
 				// create map of params to send in multipart form
@@ -177,11 +177,13 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 				// write the contents of formData to multipart form
 				writeMultipartFormData(outBuffer, params);
+				writeMultipartBoundary(outBuffer, false);
 
 				// write file data to multipart form
-				writeMultipartBoundary(outBuffer, false);
-				writeMultipartFile(outBuffer, "tile", "tile", encImage.buf);
-				writeMultipartBoundary(outBuffer, true); // multipart end boundary
+				writeMultipartFile(outBuffer, "file", "file", encImage.buf);
+
+				// write multipart end boundary
+				writeMultipartBoundary(outBuffer, true);
 
 				// write buffer to connection
 				writeTileConn.setFixedLengthStreamingMode(outBuffer.size());
@@ -685,7 +687,6 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		for (Map.Entry<String, String> entry : params.entrySet()) {
 			writeMultipartBoundary(out, false);
 			writeMultipartTextField(out, entry.getKey(), entry.getValue());
-			writeMultipartBoundary(out, false);
 		}
 	}
 
@@ -694,7 +695,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	 */
 	private void writeMultipartTextField(OutputStream out, String key, String value)
 			throws UnsupportedEncodingException, IOException {
-		String o = "Content-Disposition: form-data; name=\"" + URLEncoder.encode(key, "UTF-8") + "\"\r\n\r\n";
+		String o = "\r\nContent-Disposition: form-data; name=\"" + URLEncoder.encode(key, "UTF-8") + "\"\r\n\r\n";
 		out.write(o.getBytes(StandardCharsets.UTF_8));
 		out.write(URLEncoder.encode(value, "UTF-8").getBytes(StandardCharsets.UTF_8));
 		out.write("\r\n".getBytes(StandardCharsets.UTF_8));
@@ -704,7 +705,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	 * Writes a multipart file to the specified OutputStream
 	 */
 	private void writeMultipartFile(OutputStream out, String name, String fileName, byte[] buffer) throws IOException {
-		String o = "Content-Disposition: form-data; name=\"" + URLEncoder.encode(name, "UTF-8") + "\"; filename=\""
+		String o = "\r\nContent-Disposition: form-data; name=\"" + URLEncoder.encode(name, "UTF-8") + "\"; filename=\""
 				+ URLEncoder.encode(fileName, "UTF-8") + "\"\r\n\r\n";
 		out.write(o.getBytes(StandardCharsets.UTF_8));
 		out.write(buffer);

@@ -140,6 +140,6 @@ public abstract class MapStorageTile {
      * */
     @Override
     public String toString() {
-        return world.toString() + " " + map.toString() + "zoom: " + zoom + " " + x + "," + y;
-    }
+        return world.getName() + " " + map.getName() + "zoom: " + zoom + " " + x + "," + y;
+    }   
 }

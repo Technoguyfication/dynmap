@@ -37,11 +37,23 @@ import org.dynmap.utils.BufferInputStream;
 import org.dynmap.utils.BufferOutputStream;
 
 public class RemoteFileTreeMapStorage extends MapStorage {
+	/**
+	 * Base URL for the web location dynmap is located
+	 */
 	private String urlBase;
+
+	/**
+	 * Location of the remotefiletree folder on web
+	 */
+	private String remoteFileTreeBaseUrl;
+
+	/**
+	 * Location of tiles.php endpoint
+	 */
+	private String tilesEndpoint;
 	private String accessKey;
+
 	private final String multipartBoundary;
-	private final String remoteFileTreeBaseUrl = "standalone/filetree/";
-	private final String tilesEndpoint = remoteFileTreeBaseUrl + "tiles.php";
 
 	public class StorageTile extends MapStorageTile {
 		/**
@@ -51,13 +63,17 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		 * Ex: world/map/zoom/x.y
 		 */
 		private String tilePath;
+
+		/**
+		 * Fully-qualified URL to the tile without a file extension
+		 */
 		private String fullTileUrlNoExt;
 
 		protected StorageTile(DynmapWorld world, MapType map, int x, int y, int zoom, ImageVariant var) {
 			super(world, map, x, y, zoom, var);
 
 			tilePath = world.getName() + "/" + map.getPrefix() + var.variantSuffix + "/" + zoom + "/" + x + "." + y;
-			fullTileUrlNoExt = urlBase + "/" + remoteFileTreeBaseUrl + "/tiles/" + tilePath;
+			fullTileUrlNoExt = remoteFileTreeBaseUrl + "/tiles/" + tilePath;
 		}
 
 		/**
@@ -151,6 +167,11 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 					// make sure file deletion was successful
 					if (writeTileConn.getResponseCode() == 200) {
+						// Signal update for zoom out
+						if (zoom == 0) {
+							world.enqueueZoomOutUpdate(this);
+						}
+						
 						return true;
 					} else {
 						throw new Exception("Failed to delete tile: "
@@ -194,6 +215,11 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 				int responseCode = writeTileConn.getResponseCode();
 				if (responseCode == 200) {
+					// Signal update for zoom out
+					if (zoom == 0) {
+						world.enqueueZoomOutUpdate(this);
+					}
+
 					return true;
 				} else {
 					throw new Exception("Error sending request to server, responded with " + responseCode + ": "
@@ -279,7 +305,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 				// hash body to long
 				String hashString = readInputStreamToString(hashConn.getInputStream());
-				return Long.parseLong(hashString);
+				return Long.parseLong(hashString.trim());
 			} catch (Exception ex) {
 				Log.severe(
 						"Failed to fetch hash code for tile " + StorageTile.this.toString() + ": " + ex.getMessage());
@@ -343,7 +369,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 			try {
 				HttpURLConnection conn = createHttpRequest(url, "GET");
 
-				if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+				if (conn.getResponseCode() == 200) {
 					return conn;
 				} else {
 					return null;
@@ -407,7 +433,11 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 			return false;
 		}
 
+		// build URLs
 		urlBase = core.configuration.getString("storage/url");
+		remoteFileTreeBaseUrl = urlBase + "/standalone/filetree/";
+		tilesEndpoint = remoteFileTreeBaseUrl + "tiles.php";
+
 		accessKey = core.configuration.getString("storage/key");
 
 		return true;
@@ -477,7 +507,9 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	 * Starts an HTTP request to a server
 	 */
 	private HttpURLConnection createHttpRequest(String endpoint, String method) throws IOException {
-		String combinedUrl = urlBase + "/" + endpoint;
+		String combinedUrl = endpoint;
+		if (Log.verbose)
+			Log.info(method + ": " + combinedUrl);
 		URL url;
 		try {
 			url = new URL(combinedUrl);

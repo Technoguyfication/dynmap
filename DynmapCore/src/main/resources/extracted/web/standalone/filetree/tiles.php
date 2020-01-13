@@ -83,7 +83,7 @@ function writeTile()
 
 	// create paths for the newly created file
 	$tile_file_container = getTileContainer($tile);
-	$tile_file_name = getTileFileName($tile);
+	$tile_file_name = getTileFileNameNoExt($tile);
 
 	// create tile container if it doesn't exist
 	if (!file_exists($tile_file_container)) {
@@ -92,7 +92,7 @@ function writeTile()
 
 	// move uploaded tile file to location
 	try {
-		if (move_uploaded_file($file["tmp_name"], $tile_file_container . $tile_file_name)) {
+		if (move_uploaded_file($file["tmp_name"], $tile_file_container . $tile_file_name . "." . $tile["file_type"])) {
 			// success, write file hash
 			$hash_file = fopen($tile_file_container . $tile_file_name . ".hash", "w");
 			if (!$hash_file || !fwrite($hash_file, $tile["hash"])) {
@@ -136,8 +136,8 @@ function deleteTile()
 		}
 	}
 
-	$tile_file_name = getTileContainer($tile) . getTileFileName($tile);
-	$files = [$tile_file_name, $tile_file_name . ".hash"];
+	$tile_file_name = getTileContainer($tile) . getTileFileNameNoExt($tile);
+	$files = [$tile_file_name . "." . $tile["file_type"], $tile_file_name . ".hash"];
 
 	// delete image and hash
 	foreach ($files as $file) {
@@ -249,10 +249,10 @@ function getTileContainer($tile)
 	return sprintf("%s/tiles/%s/%s/%s/", dirname(__FILE__), $tile["world"], $tile["map_prefix"], $tile["zoom"]);
 }
 
-function getTileFileName($tile)
+function getTileFileNameNoExt($tile)
 {
-	// 460.69.png
-	return sprintf("%s.%s.%s", $tile["x"], $tile["y"], $tile["file_type"]);
+	// 460.69
+	return sprintf("%s.%s", $tile["x"], $tile["y"]);
 }
 
 function response($body, $code = 200)

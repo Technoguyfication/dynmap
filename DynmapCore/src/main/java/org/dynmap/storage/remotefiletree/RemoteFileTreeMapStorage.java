@@ -279,36 +279,34 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		 * 
 		 * @return The hash code, or null if it does not exist
 		 */
-		private Long fetchRemoteHashCode(String tileUrl) {
-			// check if we need to find the correct tile url
-			if (tileUrl == null) {
-				tileUrl = fetchTileConnectionUrl();
-
-				// if tile url is still null the tile doesn't exist
-				if (tileUrl == null)
-					return null;
+		private Long fetchRemoteHashCode(StorageTile tile) {
+			if (tile == null) {
+				tile = RemoteFileTreeMapStorage.StorageTile.this;
 			}
 
 			try {
-				HttpURLConnection hashConn = createHttpRequest(tileUrl + ".hash", "GET");
+				HttpURLConnection hashConn = createHttpRequest(tile.fullTileUrlNoExt + ".hash", "GET");
 
-				// make sure hash exists
-				if (hashConn.getResponseCode() != 200) {
-					throw new Exception("Hash not found");
+				// check response
+				int responseCode = hashConn.getResponseCode();
+				if (responseCode == 404) {
+					return null;
+				} else if (responseCode != 200) {
+					throw new Exception(String.format("Failed to fetch hash: HTTP %d: %s", responseCode,
+							readInputStreamToString(hashConn.getInputStream())));
 				}
 
 				// get length of hash body
 				int hashBodyLength = hashConn.getHeaderFieldInt("Content-Length", -1);
 				if (hashBodyLength == -1) {
-					throw new Exception("Server sent invalid hash body length");
+					throw new Exception("Invalid or missing Content-Length");
 				}
 
 				// hash body to long
 				String hashString = readInputStreamToString(hashConn.getInputStream());
 				return Long.parseLong(hashString.trim());
 			} catch (Exception ex) {
-				Log.severe(
-						"Failed to fetch hash code for tile " + StorageTile.this.toString() + ": " + ex.getMessage());
+				Log.severe("Error fetching hash: " + StorageTile.this.toString() + ": " + ex.getMessage());
 				return null;
 			}
 		}

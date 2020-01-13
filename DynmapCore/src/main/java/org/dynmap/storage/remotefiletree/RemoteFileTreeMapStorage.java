@@ -130,7 +130,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				}
 
 				// fetch file hash
-				Long hashCode = fetchRemoteHashCode(conn.getURL().toString());
+				Long hashCode = fetchRemoteHashCode();
 				if (hashCode == null) {
 					throw new Exception("Failed to fetch hash code");
 				}
@@ -147,15 +147,17 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		@Override
 		public boolean write(long hash, BufferOutputStream encImage) {
 			try {
+
 				// first, delete the alternate format tile (if it exists)
 				HttpURLConnection deleteAltTileConn = createHttpRequest(tilesEndpoint, "POST");
 				deleteAltTileConn.getOutputStream().write(createDeleteTilePayload(getOppositeEncoding()));
 
 				// make sure alternate tile was deleted correctly. even if the tile didn't
 				// exist, server should return 200
-				if (deleteAltTileConn.getResponseCode() != 200) {
-					throw new Exception("Failed to delete opposite format tile: "
-							+ readInputStreamToString(deleteAltTileConn.getInputStream()));
+				int deleteAltTileResponse = deleteAltTileConn.getResponseCode();
+				if (deleteAltTileResponse != 200) {
+					throw new Exception(String.format("Failed to delete opposite format tile: HTTP %d: %s",
+							deleteAltTileResponse, readInputStreamToString(deleteAltTileConn.getInputStream())));
 				}
 
 				// prepare connection for new tile
@@ -166,17 +168,18 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 					writeTileConn.getOutputStream().write(createDeleteTilePayload(getMatchingEncoding()));
 
 					// make sure file deletion was successful
-					if (writeTileConn.getResponseCode() == 200) {
-						// Signal update for zoom out
-						if (zoom == 0) {
-							world.enqueueZoomOutUpdate(this);
-						}
-						
-						return true;
-					} else {
-						throw new Exception("Failed to delete tile: "
-								+ readInputStreamToString(deleteAltTileConn.getInputStream()));
+					int writeTileResponse = writeTileConn.getResponseCode();
+					if (writeTileResponse != 200) {
+						throw new Exception(String.format("Failed to delete tile: HTTP %d: %s", deleteAltTileResponse,
+								readInputStreamToString(writeTileConn.getInputStream())));
 					}
+
+					// Signal update for zoom out
+					if (zoom == 0) {
+						world.enqueueZoomOutUpdate(this);
+					}
+
+					return true;
 				}
 
 				writeTileConn.setRequestProperty("Connection", "Keep-Alive");
@@ -213,20 +216,21 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				outStream.flush();
 				outStream.close();
 
-				int responseCode = writeTileConn.getResponseCode();
-				if (responseCode == 200) {
-					// Signal update for zoom out
-					if (zoom == 0) {
-						world.enqueueZoomOutUpdate(this);
-					}
-
-					return true;
-				} else {
-					throw new Exception("Error sending request to server, responded with " + responseCode + ": "
-							+ readInputStreamToString(writeTileConn.getInputStream()));
+				// check response
+				int writeTileResponse = writeTileConn.getResponseCode();
+				if (writeTileResponse != 200) {
+					throw new Exception(String.format("Failed to write tile: HTTP %d: %s", writeTileResponse,
+							readInputStreamToString(writeTileConn.getInputStream())));
 				}
+
+				// Signal update for zoom out
+				if (zoom == 0) {
+					world.enqueueZoomOutUpdate(this);
+				}
+
+				return true;
 			} catch (Exception ex) {
-				Log.severe("Failed to write tile (" + this.toString() + "): " + ex.getMessage());
+				Log.severe("Error writing tile " + this.toString() + ": " + ex.getMessage());
 				return false;
 			}
 		}
@@ -279,13 +283,9 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		 * 
 		 * @return The hash code, or null if it does not exist
 		 */
-		private Long fetchRemoteHashCode(StorageTile tile) {
-			if (tile == null) {
-				tile = RemoteFileTreeMapStorage.StorageTile.this;
-			}
-
+		private Long fetchRemoteHashCode() {
 			try {
-				HttpURLConnection hashConn = createHttpRequest(tile.fullTileUrlNoExt + ".hash", "GET");
+				HttpURLConnection hashConn = createHttpRequest(fullTileUrlNoExt + ".hash", "GET");
 
 				// check response
 				int responseCode = hashConn.getResponseCode();
@@ -313,7 +313,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 		@Override
 		public boolean matchesHashCode(long hash) {
-			Long thisHash = fetchRemoteHashCode(null);
+			Long thisHash = fetchRemoteHashCode();
 			if (thisHash == null) {
 				return false;
 			}
@@ -501,33 +501,6 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		}
 	}
 
-	/**
-	 * Starts an HTTP request to a server
-	 */
-	private HttpURLConnection createHttpRequest(String endpoint, String method) throws IOException {
-		String combinedUrl = endpoint;
-		if (Log.verbose)
-			Log.info(method + ": " + combinedUrl);
-		URL url;
-		try {
-			url = new URL(combinedUrl);
-		} catch (MalformedURLException e) {
-			Log.severe("Malformed URL: " + combinedUrl, e);
-			return null;
-		}
-
-		// open connection to server
-		URLConnection conn = url.openConnection();
-		HttpURLConnection http = (HttpURLConnection) conn;
-
-		// set up http client
-		http.setUseCaches(false);
-		http.setDoOutput(true);
-		http.setRequestMethod(method);
-
-		return http;
-	}
-
 	@Override
 	public void enumMapTiles(DynmapWorld world, MapType map, MapStorageTileEnumCB cb) {
 		List<MapType> mtlist;
@@ -543,21 +516,22 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				// enumerate zoom levels
 				ArrayList<Integer> zoomLevels = new ArrayList<Integer>();
 				try {
-					HttpURLConnection conn = createHttpRequest(tilesEndpoint, "GET");
-
-					// write parameters to output
+					// get url parameters
 					Map<String, String> params = new HashMap<String, String>();
 					params.put("action", "enumzoom");
 					params.put("world", world.getName());
 					params.put("map_prefix", map.getPrefix() + var.variantSuffix);
-					byte[] formData = createFormData(params);
-					conn.getOutputStream().write(formData);
+					String urlParams = createUrlParams(params);
+
+					// make connection
+					HttpURLConnection conn = createHttpRequest(tilesEndpoint + "?" + urlParams, "GET");
 
 					// make sure we get the correct response code
 					int responseCode = conn.getResponseCode();
 					if (responseCode != 200) {
 						// throw new Exception("Invalid response code: " + responseCode);
-						Log.severe("Failed to enumerate zoom levels: invalid response code: " + responseCode);
+						Log.severe("Failed to enumerate zoom levels, server responded with: " + responseCode + "\n"
+								+ readInputStreamToString(conn.getInputStream()));
 						return;
 					}
 
@@ -605,16 +579,16 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	private void processEnumMapTiles(DynmapWorld world, MapType map, ImageVariant var, int zoom,
 			MapStorageTileEnumCB cb, MapStorageBaseTileEnumCB cbBase, MapStorageTileSearchEndCB cbEnd) {
 		try {
-			HttpURLConnection conn = createHttpRequest(tilesEndpoint, "GET");
-
-			// write parameters to output
+			// create url parameters
 			Map<String, String> params = new HashMap<String, String>();
 			params.put("action", "enumtiles");
 			params.put("world", world.getName());
 			params.put("map_prefix", map.getPrefix() + var.variantSuffix);
 			params.put("zoom", Integer.toString(zoom));
-			byte[] formData = createFormData(params);
-			conn.getOutputStream().write(formData);
+			String urlParams = createUrlParams(params);
+
+			// make connection
+			HttpURLConnection conn = createHttpRequest(tilesEndpoint + "?" + urlParams, "GET");
 
 			// make sure we get the correct response code
 			int responseCode = conn.getResponseCode();
@@ -697,15 +671,49 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	}
 
 	/**
-	 * Gets the data for a simple HTTP form
+	 * Starts an HTTP request to a server
+	 * 
+	 * @return The connection object, or null if there was an error
+	 */
+	private HttpURLConnection createHttpRequest(String endpoint, String method) throws IOException {
+		String combinedUrl = endpoint;
+		URL url;
+		try {
+			url = new URL(combinedUrl);
+		} catch (MalformedURLException e) {
+			Log.severe("Malformed URL: " + combinedUrl, e);
+			return null;
+		}
+
+		// open connection to server
+		URLConnection conn = url.openConnection();
+		HttpURLConnection http = (HttpURLConnection) conn;
+
+		// set up http client
+		http.setUseCaches(false);
+		http.setDoOutput(true);
+		http.setRequestMethod(method);
+
+		return http;
+	}
+
+	/**
+	 * Gets the data for a simple HTTP urlencoded form (POST only)
 	 * 
 	 * @throws UnsupportedEncodingException
 	 */
 	private byte[] createFormData(Map<String, String> params) throws UnsupportedEncodingException {
+		return createUrlParams(params).getBytes(StandardCharsets.UTF_8);
+	}
+
+	/**
+	 * Gets the urlencoded parameters for an HTTP request
+	 */
+	private String createUrlParams(Map<String, String> params) throws UnsupportedEncodingException {
 		StringJoiner sj = new StringJoiner("&");
 		for (Map.Entry<String, String> entry : params.entrySet())
 			sj.add(URLEncoder.encode(entry.getKey(), "UTF-8") + "=" + URLEncoder.encode(entry.getValue(), "UTF-8"));
-		return sj.toString().getBytes(StandardCharsets.UTF_8);
+		return sj.toString();
 	}
 
 	/**

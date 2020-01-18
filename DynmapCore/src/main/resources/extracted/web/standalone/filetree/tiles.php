@@ -95,7 +95,7 @@ function writeTile()
 		if (move_uploaded_file($file["tmp_name"], $tile_file_container . $tile_file_name . "." . $tile["file_type"])) {
 			// success, write file hash
 			$hash_file = fopen($tile_file_container . $tile_file_name . ".hash", "w");
-			if (!$hash_file || !fwrite($hash_file, $tile["hash"])) {
+			if (!$hash_file || !fwrite($hash_file, $tile["hash"]) || !fclose($hash_file)) {
 				// failed to write hash, delete image file
 				unlink($tile_file_container . $tile_file_name);
 				throw new Exception("Failed to write tile hash");

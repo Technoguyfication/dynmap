@@ -52,7 +52,6 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	 */
 	private String tilesEndpoint;
 	private String markersEndpoint;
-	private String facesEndpoint;
 	private String accessKey;
 
 	private final String multipartBoundary;
@@ -422,7 +421,6 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		remoteFileTreeBaseUrl = urlBase + "/standalone/filetree/";
 		tilesEndpoint = remoteFileTreeBaseUrl + "tiles.php";
 		markersEndpoint = remoteFileTreeBaseUrl + "markers.php";
-		facesEndpoint = remoteFileTreeBaseUrl + "faces.php";
 
 		accessKey = core.configuration.getString("storage/key");
 
@@ -614,7 +612,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 			// check if we are deleting the file
 			if (content == null) {
-				params.put("action", "deletefile");
+				params.put("action", "deletemarkerfile");
 				byte[] payload = createFormData(params);
 				conn.getOutputStream().write(payload);
 
@@ -622,7 +620,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				return checkHttpResponse(conn, false);
 			}
 
-			params.put("action", "setfile");
+			params.put("action", "setmarkerfile");
 			params.put("content", content);
 			byte[] payload = createFormData(params);
 
@@ -640,7 +638,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	@Override
 	public String getMarkerFile(String world) {
 		try {
-			HttpURLConnection markerConn = createHttpRequest(remoteFileTreeBaseUrl + "/markers" + world + ".json",
+			HttpURLConnection markerConn = createHttpRequest(remoteFileTreeBaseUrl + "/markers/_markers_/marker_" + world + ".json",
 					"GET");
 
 			// check response
@@ -668,7 +666,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 			// if encImage is null, we are deleting the current marker
 			if (encImage == null) {
-				params.put("action", "deleteimage");
+				params.put("action", "deletemarkerimage");
 				byte[] payload = createFormData(params);
 				conn.getOutputStream().write(payload);
 
@@ -682,7 +680,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 			ByteArrayOutputStream outBuffer = new ByteArrayOutputStream();
 
 			// create map of params to send in multipart form
-			params.put("action", "setimage");
+			params.put("action", "setmarkerimage");
 
 			// write the contents of formData to multipart form
 			writeMultipartFormData(outBuffer, params);
@@ -712,7 +710,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	@Override
 	public BufferInputStream getMarkerImage(String markerid) {
 		try {
-			HttpURLConnection conn = createHttpRequest(remoteFileTreeBaseUrl + "/markers/images" + markerid + ".png",
+			HttpURLConnection conn = createHttpRequest(remoteFileTreeBaseUrl + "/markers/_markers_/" + markerid + ".png",
 					"GET");
 
 			// read image data
@@ -784,7 +782,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	@Override
 	public boolean setPlayerFaceImage(String playerName, PlayerFaces.FaceType type, BufferOutputStream encImage) {
 		try {
-			HttpURLConnection conn = createHttpRequest(facesEndpoint, "POST");
+			HttpURLConnection conn = createHttpRequest(markersEndpoint, "POST");
 
 			// start creating url parameters now
 			HashMap<String, String> params = new HashMap<>();
@@ -794,7 +792,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 			// if encImage is null, we are deleting the face
 			if (encImage == null) {
-				params.put("action", "deletefile");
+				params.put("action", "deletefacefile");
 				byte[] payload = createFormData(params);
 				conn.getOutputStream().write(payload);
 
@@ -808,7 +806,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 			ByteArrayOutputStream outBuffer = new ByteArrayOutputStream();
 
 			// create map of params to send in multipart form
-			params.put("action", "setfile");
+			params.put("action", "setfacefile");
 
 			// write the contents of formData to multipart form
 			writeMultipartFormData(outBuffer, params);
@@ -839,7 +837,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	public BufferInputStream getPlayerFaceImage(String playername, PlayerFaces.FaceType facetype) {
 		try {
 			HttpURLConnection conn = createHttpRequest(
-					remoteFileTreeBaseUrl + "/markers/faces" + facetype.id + "/" + playername + ".png", "GET");
+					remoteFileTreeBaseUrl + "/markers/_markers_/faces/" + facetype.id + "/" + playername + ".png", "GET");
 
 			// read image data
 			if (!checkHttpResponse(conn, true)) {
@@ -871,7 +869,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	public boolean hasPlayerFaceImage(String playerName, PlayerFaces.FaceType type) {
 		try {
 			HttpURLConnection conn = createHttpRequest(
-					remoteFileTreeBaseUrl + "/markers/faces" + type.id + "/" + playerName + ".png", "GET");
+					remoteFileTreeBaseUrl + "/markers/_markers_/faces/" + type.id + "/" + playerName + ".png", "GET");
 
 			// check response
 			return checkHttpResponse(conn, true);

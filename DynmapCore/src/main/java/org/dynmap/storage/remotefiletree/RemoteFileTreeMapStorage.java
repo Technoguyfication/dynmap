@@ -52,6 +52,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	 */
 	private String tilesEndpoint;
 	private String markersEndpoint;
+	private String facesEndpoint;
 	private String accessKey;
 
 	private final String multipartBoundary;
@@ -421,6 +422,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		remoteFileTreeBaseUrl = urlBase + "/standalone/filetree/";
 		tilesEndpoint = remoteFileTreeBaseUrl + "tiles.php";
 		markersEndpoint = remoteFileTreeBaseUrl + "markers.php";
+		facesEndpoint = remoteFileTreeBaseUrl + "faces.php";
 
 		accessKey = core.configuration.getString("storage/key");
 
@@ -714,7 +716,10 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 					"GET");
 
 			// read image data
-			checkHttpResponse(conn, false);
+			if (!checkHttpResponse(conn, true)) {
+				return null;
+			}
+
 			InputStream bodyStream = conn.getInputStream();
 			int bodyLength = conn.getHeaderFieldInt("Content-Length", -1);
 
@@ -778,20 +783,102 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 	@Override
 	public boolean setPlayerFaceImage(String playerName, PlayerFaces.FaceType type, BufferOutputStream encImage) {
-		// TODO: fix stub
-		return false;
+		try {
+			HttpURLConnection conn = createHttpRequest(facesEndpoint, "POST");
+
+			// start creating url parameters now
+			HashMap<String, String> params = new HashMap<>();
+			params.put("key", accessKey);
+			params.put("player_name", playerName);
+			params.put("type", type.id);
+
+			// if encImage is null, we are deleting the face
+			if (encImage == null) {
+				params.put("action", "deletefile");
+				byte[] payload = createFormData(params);
+				conn.getOutputStream().write(payload);
+
+				// make sure file deletion was successful
+				return checkHttpResponse(conn, false);
+			}
+
+			conn.setRequestProperty("Connection", "Keep-Alive");
+			conn.setRequestProperty("Cache-Control", "no-cache");
+			conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=" + multipartBoundary);
+			ByteArrayOutputStream outBuffer = new ByteArrayOutputStream();
+
+			// create map of params to send in multipart form
+			params.put("action", "setfile");
+
+			// write the contents of formData to multipart form
+			writeMultipartFormData(outBuffer, params);
+			writeMultipartBoundary(outBuffer, false);
+
+			// write file data to multipart form
+			writeMultipartFile(outBuffer, "file", "file", encImage.buf);
+
+			// write multipart end boundary
+			writeMultipartBoundary(outBuffer, true);
+
+			// write buffer to connection
+			conn.setFixedLengthStreamingMode(outBuffer.size());
+			OutputStream outStream = conn.getOutputStream();
+			outStream.write(outBuffer.toByteArray());
+			outStream.flush();
+			outStream.close();
+
+			// check response
+			return checkHttpResponse(conn, false);
+		} catch (Exception ex) {
+			Log.severe("Error setting " + type.id + " face for " + playerName + ": " + ex.getMessage());
+			return false;
+		}
 	}
 
 	@Override
 	public BufferInputStream getPlayerFaceImage(String playername, PlayerFaces.FaceType facetype) {
-		// TODO: fix stub
-		return new BufferInputStream(new byte[0]);
+		try {
+			HttpURLConnection conn = createHttpRequest(
+					remoteFileTreeBaseUrl + "/markers/faces" + facetype.id + "/" + playername + ".png", "GET");
+
+			// read image data
+			if (!checkHttpResponse(conn, true)) {
+				return null;
+			}
+
+			InputStream bodyStream = conn.getInputStream();
+			int bodyLength = conn.getHeaderFieldInt("Content-Length", -1);
+
+			// make sure body length was parsed correctly
+			if (bodyLength == -1) {
+				throw new Exception("Server sent invalid body length");
+			}
+
+			byte[] buffer = new byte[bodyLength];
+			// read entire body into buffer
+			while (bodyStream.read(buffer) >= 0) {
+			}
+
+			BufferInputStream image = new BufferInputStream(buffer);
+			return image;
+		} catch (Exception ex) {
+			Log.severe("Error fetching " + facetype.id + " face image for " + playername + ": " + ex.getMessage());
+			return null;
+		}
 	}
 
 	@Override
 	public boolean hasPlayerFaceImage(String playerName, PlayerFaces.FaceType type) {
-		// TODO: fix stub
-		return false;
+		try {
+			HttpURLConnection conn = createHttpRequest(
+					remoteFileTreeBaseUrl + "/markers/faces" + type.id + "/" + playerName + ".png", "GET");
+
+			// check response
+			return checkHttpResponse(conn, true);
+		} catch (Exception ex) {
+			Log.severe("Error fetching " + type.id + " face image for " + playerName + ": " + ex.getMessage());
+			return false;
+		}
 	}
 
 	/**

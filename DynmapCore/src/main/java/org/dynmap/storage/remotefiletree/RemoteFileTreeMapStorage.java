@@ -51,6 +51,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	 * Location of tiles.php endpoint
 	 */
 	private String tilesEndpoint;
+	private String markersEndpoint;
 	private String accessKey;
 
 	private final String multipartBoundary;
@@ -95,6 +96,9 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 			// read image data
 			try {
+				// check response before reading data
+				checkHttpResponse(conn, false);
+
 				InputStream bodyStream = conn.getInputStream();
 				int bodyLength = conn.getHeaderFieldInt("Content-Length", -1);
 
@@ -152,13 +156,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				HttpURLConnection deleteAltTileConn = createHttpRequest(tilesEndpoint, "POST");
 				deleteAltTileConn.getOutputStream().write(createDeleteTilePayload(getOppositeEncoding()));
 
-				// make sure alternate tile was deleted correctly. even if the tile didn't
-				// exist, server should return 200
-				int deleteAltTileResponse = deleteAltTileConn.getResponseCode();
-				if (deleteAltTileResponse != 200) {
-					throw new Exception(String.format("Failed to delete opposite format tile: HTTP %d: %s",
-							deleteAltTileResponse, readInputStreamToString(deleteAltTileConn.getInputStream())));
-				}
+				checkHttpResponse(deleteAltTileConn, false);
 
 				// prepare connection for new tile
 				HttpURLConnection writeTileConn = createHttpRequest(tilesEndpoint, "POST");
@@ -167,12 +165,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				if (encImage == null) {
 					writeTileConn.getOutputStream().write(createDeleteTilePayload(getMatchingEncoding()));
 
-					// make sure file deletion was successful
-					int writeTileResponse = writeTileConn.getResponseCode();
-					if (writeTileResponse != 200) {
-						throw new Exception(String.format("Failed to delete tile: HTTP %d: %s", deleteAltTileResponse,
-								readInputStreamToString(writeTileConn.getInputStream())));
-					}
+					checkHttpResponse(writeTileConn, false);
 
 					// Signal update for zoom out
 					if (zoom == 0) {
@@ -217,11 +210,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				outStream.close();
 
 				// check response
-				int writeTileResponse = writeTileConn.getResponseCode();
-				if (writeTileResponse != 200) {
-					throw new Exception(String.format("Failed to write tile: HTTP %d: %s", writeTileResponse,
-							readInputStreamToString(writeTileConn.getInputStream())));
-				}
+				checkHttpResponse(writeTileConn, false);
 
 				// Signal update for zoom out
 				if (zoom == 0) {
@@ -288,12 +277,8 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 				HttpURLConnection hashConn = createHttpRequest(fullTileUrlNoExt + ".hash", "GET");
 
 				// check response
-				int responseCode = hashConn.getResponseCode();
-				if (responseCode == 404) {
+				if (!checkHttpResponse(hashConn, true)) {
 					return null;
-				} else if (responseCode != 200) {
-					throw new Exception(String.format("Failed to fetch hash: HTTP %d: %s", responseCode,
-							readInputStreamToString(hashConn.getInputStream())));
 				}
 
 				// get length of hash body
@@ -435,6 +420,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 		urlBase = core.configuration.getString("storage/url");
 		remoteFileTreeBaseUrl = urlBase + "/standalone/filetree/";
 		tilesEndpoint = remoteFileTreeBaseUrl + "tiles.php";
+		markersEndpoint = remoteFileTreeBaseUrl + "markers.php";
 
 		accessKey = core.configuration.getString("storage/key");
 
@@ -527,13 +513,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 					HttpURLConnection conn = createHttpRequest(tilesEndpoint + "?" + urlParams, "GET");
 
 					// make sure we get the correct response code
-					int responseCode = conn.getResponseCode();
-					if (responseCode != 200) {
-						// throw new Exception("Invalid response code: " + responseCode);
-						Log.severe("Failed to enumerate zoom levels, server responded with: " + responseCode + "\n"
-								+ readInputStreamToString(conn.getInputStream()));
-						return;
-					}
+					checkHttpResponse(conn, false);
 
 					// read each zoom level from response
 					BufferedReader stringReader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
@@ -591,10 +571,7 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 			HttpURLConnection conn = createHttpRequest(tilesEndpoint + "?" + urlParams, "GET");
 
 			// make sure we get the correct response code
-			int responseCode = conn.getResponseCode();
-			if (responseCode != 200) {
-				throw new Exception("Invalid response code: " + responseCode);
-			}
+			checkHttpResponse(conn, false);
 
 			// read each line as a new map tile
 			BufferedReader stringReader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
@@ -624,9 +601,128 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	}
 
 	@Override
+	public boolean setMarkerFile(String world, String content) {
+		try {
+			HttpURLConnection conn = createHttpRequest(markersEndpoint, "POST");
+
+			// create payload
+			HashMap<String, String> params = new HashMap<>();
+			params.put("action", "setfile");
+			params.put("key", accessKey);
+			params.put("world", world);
+			params.put("content", content);
+			byte[] payload = createFormData(params);
+
+			// write data
+			conn.getOutputStream().write(payload);
+
+			// check response
+			return checkHttpResponse(conn, false);
+		} catch (Exception ex) {
+			Log.severe("Failed to set marker file for " + world + ": " + ex.getMessage());
+			return false;
+		}
+	}
+
+	@Override
 	public String getMarkerFile(String world) {
-		// TODO: fix stub
-		return "{}";
+		try {
+			HttpURLConnection markerConn = createHttpRequest(remoteFileTreeBaseUrl + "/markers" + world + ".json",
+					"GET");
+
+			// check response
+			if (!checkHttpResponse(markerConn, true)) {
+				return null;
+			}
+
+			String markerString = readInputStreamToString(markerConn.getInputStream());
+			return markerString;
+		} catch (Exception ex) {
+			Log.severe("Error fetching markers for " + world + ": " + ex.getMessage());
+			return null;
+		}
+	}
+
+	@Override
+	public boolean setMarkerImage(String markerid, BufferOutputStream encImage) {
+		try {
+			HttpURLConnection conn = createHttpRequest(markersEndpoint, "POST");
+
+			// start creating url parameters now
+			HashMap<String, String> params = new HashMap<>();
+			params.put("key", accessKey);
+			params.put("markerid", markerid);
+
+			// if encImage is null, we are deleting the current marker
+			if (encImage == null) {
+				params.put("action", "deleteimage");
+				byte[] payload = createFormData(params);
+				conn.getOutputStream().write(payload);
+
+				// make sure file deletion was successful
+				return checkHttpResponse(conn, false);
+			}
+
+			conn.setRequestProperty("Connection", "Keep-Alive");
+			conn.setRequestProperty("Cache-Control", "no-cache");
+			conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=" + multipartBoundary);
+			ByteArrayOutputStream outBuffer = new ByteArrayOutputStream();
+
+			// create map of params to send in multipart form
+			params.put("action", "setimage");
+
+			// write the contents of formData to multipart form
+			writeMultipartFormData(outBuffer, params);
+			writeMultipartBoundary(outBuffer, false);
+
+			// write file data to multipart form
+			writeMultipartFile(outBuffer, "file", "file", encImage.buf);
+
+			// write multipart end boundary
+			writeMultipartBoundary(outBuffer, true);
+
+			// write buffer to connection
+			conn.setFixedLengthStreamingMode(outBuffer.size());
+			OutputStream outStream = conn.getOutputStream();
+			outStream.write(outBuffer.toByteArray());
+			outStream.flush();
+			outStream.close();
+
+			// check response
+			return checkHttpResponse(conn, false);
+		} catch (Exception ex) {
+			Log.severe("Error setting marker image " + markerid + ": " + ex.getMessage());
+			return false;
+		}
+	}
+
+	@Override
+	public BufferInputStream getMarkerImage(String markerid) {
+		try {
+			HttpURLConnection conn = createHttpRequest(remoteFileTreeBaseUrl + "/markers/images" + markerid + ".png",
+					"GET");
+
+			// read image data
+			checkHttpResponse(conn, false);
+			InputStream bodyStream = conn.getInputStream();
+			int bodyLength = conn.getHeaderFieldInt("Content-Length", -1);
+
+			// make sure body length was parsed correctly
+			if (bodyLength == -1) {
+				throw new Exception("Server sent invalid body length");
+			}
+
+			byte[] buffer = new byte[bodyLength];
+			// read entire body into buffer
+			while (bodyStream.read(buffer) >= 0) {
+			}
+
+			BufferInputStream image = new BufferInputStream(buffer);
+			return image;
+		} catch (Exception ex) {
+			Log.severe("Remote marker image read error: " + ex);
+			return null;
+		}
 	}
 
 	@Override
@@ -647,27 +743,40 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	}
 
 	@Override
-	public BufferInputStream getMarkerImage(String markerid) {
-		// TODO: fix stub
-		return new BufferInputStream(new byte[0]);
-	}
-
-	@Override
-	public boolean setMarkerImage(String markerid, BufferOutputStream encImage) {
-		// TODO: fix stub
-		return false;
-	}
-
-	@Override
-	public boolean setMarkerFile(String world, String content) {
-		// TODO: fix stub
-		return false;
-	}
-
-	@Override
 	public boolean hasPlayerFaceImage(String playerName, PlayerFaces.FaceType type) {
 		// TODO: fix stub
 		return false;
+	}
+
+	/**
+	 * Validates that an HttpURLConnection has completed with a success status code
+	 * 
+	 * @param conn          The connection to check
+	 * @param allowNotFound true to return false on 404/403 errors, false to throw
+	 *                      an exception
+	 * @return Whether the connection is successful or not, this only applies to not
+	 *         found errors. Everything else throws an exception
+	 */
+	private boolean checkHttpResponse(HttpURLConnection conn, boolean allowNotFound) throws Exception {
+		int response = conn.getResponseCode();
+		if (response != 200) {
+			// return false if not found, but do not throw an exceptino
+			if (allowNotFound && response == 404 || response == 403) {
+				return false;
+			}
+
+			InputStream is = null;
+			if (response >= 400) {
+				is = conn.getErrorStream();
+			} else {
+				is = conn.getInputStream();
+			}
+
+			throw new Exception(String.format("Invalid Response: HTTP %d: %s", response, readInputStreamToString(is)));
+		}
+
+		// 200 response
+		return true;
 	}
 
 	/**

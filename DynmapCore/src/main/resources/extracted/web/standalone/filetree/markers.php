@@ -54,7 +54,7 @@ function setMarkerFile()
 
 	$marker = [
 		"world" => $_REQUEST["world"] ?? null,
-		"contents" => $_REQUEST["contents"] ?? null
+		"content" => $_REQUEST["content"] ?? null
 	];
 
 	// make sure no parameters were left null
@@ -74,7 +74,7 @@ function setMarkerFile()
 	// set marker file
 	try {
 		$marker_file = fopen($marker_file_path, "w");
-		if (!$marker_file || !fwrite($marker_file, $marker["contents"]) || !fclose($marker_file)) {
+		if (!$marker_file || !fwrite($marker_file, $marker["content"]) || !fclose($marker_file)) {
 			// failed to write marker file
 			throw new Exception("Failed to write marker file");
 		}
@@ -122,7 +122,7 @@ function deleteMarkerImageFile()
 	checkMethod("POST");
 
 	$image = [
-		"name" => $_REQUEST["name"] ?? null
+		"markerid" => $_REQUEST["markerid"] ?? null
 	];
 
 	// make sure no parameters were left null
@@ -134,7 +134,7 @@ function deleteMarkerImageFile()
 	}
 
 	// delete the file
-	$marker_file_path = getMarkerImageFile($image["name"]);
+	$marker_file_path = getMarkerImageFile($image["markerid"]);
 	if (!unlink($marker_file_path)) {
 		response("Failed to delete file " . $marker_file_path, 500);
 	}
@@ -149,7 +149,7 @@ function setMarkerImageFile()
 	checkMethod("POST");
 
 	$image = [
-		"name" => $_REQUEST["name"] ?? null
+		"markerid" => $_REQUEST["markerid"] ?? null
 	];
 
 	$file = $_FILES["file"] ?? null;	// get reference to uploaded file
@@ -169,7 +169,7 @@ function setMarkerImageFile()
 	}
 
 	// create paths for the newly created file
-	$image_file_path = getMarkerImageFile($image["name"]);
+	$image_file_path = getMarkerImageFile($image["markerid"]);
 	//$image_file_container = dirname($image_file_path);
 
 	// create tile container if it doesn't exist

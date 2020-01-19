@@ -607,9 +607,20 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 
 			// create payload
 			HashMap<String, String> params = new HashMap<>();
-			params.put("action", "setfile");
 			params.put("key", accessKey);
 			params.put("world", world);
+
+			// check if we are deleting the file
+			if (content == null) {
+				params.put("action", "deletefile");
+				byte[] payload = createFormData(params);
+				conn.getOutputStream().write(payload);
+
+				// check response
+				return checkHttpResponse(conn, false);
+			}
+
+			params.put("action", "setfile");
 			params.put("content", content);
 			byte[] payload = createFormData(params);
 
@@ -726,8 +737,43 @@ public class RemoteFileTreeMapStorage extends MapStorage {
 	}
 
 	@Override
-	public void purgeMapTiles(DynmapWorld world, MapType type) {
-		// TODO: fix stub
+	public void purgeMapTiles(DynmapWorld world, MapType map) {
+		List<MapType> mtlist;
+
+		if (map != null) {
+			mtlist = Collections.singletonList(map);
+		} else { // Else, add all maps
+			mtlist = new ArrayList<MapType>(world.maps);
+		}
+		for (MapType mt : mtlist) {
+			ImageVariant[] vars = mt.getVariants();
+			for (ImageVariant var : vars) {
+				processPurgeMapTiles(world, mt, var);
+			}
+		}
+	}
+
+	private void processPurgeMapTiles(DynmapWorld world, MapType type, ImageVariant var) {
+		try {
+			HttpURLConnection conn = createHttpRequest(tilesEndpoint, "POST");
+
+			// create payload
+			HashMap<String, String> params = new HashMap<>();
+			params.put("action", "purge");
+			params.put("key", accessKey);
+			params.put("world", world.getName());
+			params.put("map_prefix", type.getPrefix() + var.variantSuffix);
+			byte[] payload = createFormData(params);
+
+			// write data
+			conn.getOutputStream().write(payload);
+
+			// check response
+			checkHttpResponse(conn, false);
+		} catch (Exception ex) {
+			Log.severe("Failed to purge map for world " + world + ": " + ex.getMessage()
+					+ "\n-- This could be due to a PHP script timeout on the remote server. Try running the purge again. --");
+		}
 	}
 
 	@Override
